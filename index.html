@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1020">
+<title>Sarah</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100dvh; display: flex; flex-direction: column;
+         background: #0b1020; color: #e8ecff; font-family: system-ui, sans-serif; }
+  header { padding: 14px 16px; display: flex; justify-content: space-between;
+           align-items: center; font-size: 20px; font-weight: 600; color: #7cc4ff; }
+  header div button { margin-left: 6px; }
+  #chat { flex: 1; overflow-y: auto; padding: 8px 12px; }
+  .m { max-width: 85%; padding: 10px 14px; margin: 6px 0; border-radius: 16px;
+       white-space: pre-wrap; line-height: 1.4; }
+  .user { margin-left: auto; background: #2a4bd7; }
+  .bot { margin-right: auto; background: #1b2340; }
+  footer { display: flex; gap: 6px; padding: 10px; background: #0f1630; }
+  input { flex: 1; padding: 12px; border-radius: 12px; border: 0; font-size: 16px;
+          background: #1b2340; color: #fff; }
+  button { padding: 10px 14px; border: 0; border-radius: 12px; font-size: 16px;
+           background: #3b82f6; color: #fff; }
+  header button { background: #1b2340; font-size: 14px; padding: 6px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <span>Sarah</span>
+  <div>
+    <button id="voice">Voice: on</button>
+    <button id="key">Key</button>
+  </div>
+</header>
+<div id="chat"></div>
+<footer>
+  <input id="q" placeholder="Ask anything" autocomplete="off">
+  <button id="mic">Mic</button>
+  <button id="send">Send</button>
+</footer>
+
+<script>
+const SYSTEM = "You are Sarah, a calm, sharp, slightly witty personal assistant. " +
+  "Put the direct answer in the first sentence, under 25 words. " +
+  "Then add 2 short lines explaining why, and one everyday analogy. " +
+  "Then offer to go deeper in one short line. Keep replies short enough to be spoken aloud.";
+const MODEL = "llama-3.1-8b-instant";
+
+const chat = document.getElementById("chat");
+const q = document.getElementById("q");
+let history = [];
+let voiceOn = true;
+
+function getKey(force) {
+  let k = localStorage.getItem("groq_key");
+  if (!k || force) {
+    k = prompt("Paste your free Groq API key. It is stored only on this phone.");
+    if (k) localStorage.setItem("groq_key", k.trim());
+  }
+  return localStorage.getItem("groq_key");
+}
+
+function add(cls, text) {
+  const d = document.createElement("div");
+  d.className = "m " + cls;
+  d.textContent = text;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+
+function speak(text) {
+  if (!voiceOn || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+async function ask(text) {
+  text = text.trim();
+  if (!text) return;
+  const key = getKey();
+  if (!key) return;
+  q.value = "";
+  speechSynthesis.cancel();
+  add("user", text);
+  history.push({ role: "user", content: text });
+  const bubble = add("bot", "...");
+  let full = "";
+  try {
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+      body: JSON.stringify({
+        model: MODEL, stream: true, max_tokens: 300,
+        messages: [{ role: "system", content: SYSTEM }, ...history.slice(-10)]
+      })
+    });
+    if (!r.ok) {
+      if (r.status === 401) localStorage.removeItem("groq_key");
+      bubble.textContent = "Error " + r.status + ": " + (await r.text());
+      history.pop();
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const d = line.slice(6).trim();
+        if (d === "[DONE]") continue;
+        try {
+          const t = JSON.parse(d).choices[0].delta.content;
+          if (t) { full += t; bubble.textContent = full; chat.scrollTop = chat.scrollHeight; }
+        } catch (e) {}
+      }
+    }
+    history.push({ role: "assistant", content: full });
+    speak(full);
+  } catch (e) {
+    bubble.textContent = "Connection problem: " + e.message;
+    history.pop();
+  }
+}
+
+document.getElementById("send").onclick = () => ask(q.value);
+q.addEventListener("keydown", e => { if (e.key === "Enter") ask(q.value); });
+document.getElementById("key").onclick = () => getKey(true);
+document.getElementById("voice").onclick = e => {
+  voiceOn = !voiceOn;
+  e.target.textContent = "Voice: " + (voiceOn ? "on" : "off");
+  if (!voiceOn) speechSynthesis.cancel();
+};
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+document.getElementById("mic").onclick = () => {
+  if (!SR) { alert("Voice input is not supported in this browser. Use Chrome."); return; }
+  const rec = new SR();
+  rec.lang = navigator.language || "en-US";
+  rec.onresult = e => ask(e.results[0][0].transcript);
+  rec.onerror = e => add("bot", "Mic error: " + e.error);
+  rec.start();
+};
+
+add("bot", "Sarah online. Ask me anything.");
+</script>
+</body>
+  </html>
+  
